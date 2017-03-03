@@ -1,0 +1,9 @@
+{
+	"name": "tarindex",
+	"authors": [
+		"André Puel"
+	],
+	"description": "A minimal D application.",
+	"copyright": "Copyright © 2017, André Puel",
+	"license": "proprietary"
+}
