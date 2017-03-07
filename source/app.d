@@ -24,6 +24,10 @@ ulong fromOctect(const(char)[] input) pure @nogc {
 	return result;
 }
 
+T ceildiv(T)(T a, T b) {
+	return (a + (b - 1))/b;
+}
+
 struct TarHeader {
 	import std.string : fromStringz;
 
@@ -161,14 +165,14 @@ struct TarHeader {
 
 	const(TarHeader)* next_extended(void* end) const pure {
 		const(void)* start = next_normal(end).data_normal().ptr;
-		ulong blocks = (filesize + TarHeader.sizeof - 1)/TarHeader.sizeof;
+		ulong blocks = filesize.ceildiv(TarHeader.sizeof);
 
 		return next(start, blocks, end);
 	}
 
 	const(TarHeader)* next_normal(void* end) const pure {
 		const(void)* start = (cast(const(void)*)&this) + TarHeader.sizeof;
-		ulong blocks = (filesize_normal + TarHeader.sizeof - 1)/TarHeader.sizeof;
+		ulong blocks = filesize_normal.ceildiv(TarHeader.sizeof);
 		return next(start, blocks, end);
 	}
 
@@ -189,6 +193,15 @@ struct TarHeader {
 			debug writeln("Skip ", start);
 			start += TarHeader.sizeof;
 		}
+	}
+
+	const(ubyte)[] tarball() const {
+		ulong blocks = 1 + filesize_normal.ceildiv(TarHeader.sizeof);
+		if (type == TarType.extended) {
+			 blocks += 1 + filesize_extended.ceildiv(TarHeader.sizeof);
+		}
+		const(ubyte)* start = cast(const(ubyte)*)&this;
+		return start[0..blocks * 512];
 	}
 }
 static assert(TarHeader.sizeof == 512);
@@ -226,27 +239,27 @@ struct Directory {
 		import std.typecons : tuple;
 
 		if (path.length == 0) {
-			return tuple(&this, cast(const(ubyte)[])null);
+			return tuple(&this, cast(const(TarHeader)*)null);
 		} else if (path.length == 1) {
 			auto file = path[0] in files;
 
 			if (file !is null) {
-				return tuple(cast(Directory*)null, (*file).data);
+				return tuple(cast(Directory*)null, *file);
 			}
 
 			auto dir = path[0] in directories;
 			if (dir !is null) {
-				return tuple(dir, cast(const(ubyte)[])null);
+				return tuple(dir, cast(const(TarHeader)*)null);
 			}
 
-			return tuple(cast(Directory*)null, cast(const(ubyte)[])null);
+			return tuple(cast(Directory*)null, cast(const(TarHeader)*)null);
 		} else {
 			auto dir = path[0] in directories;
 			if (dir !is null) {
 				return dir.get(path[1..$]);
 			}
 
-			return tuple(cast(Directory*)null, cast(const(ubyte)[])null);
+			return tuple(cast(Directory*)null, cast(const(TarHeader)*)null);
 		}
 	}
 
@@ -285,11 +298,29 @@ struct Directory {
 	}
 }
 
+void tarball(Directory dir, ref File output) {
+	foreach(file; dir.files) {
+		output.rawWrite(file.tarball);
+	}
+
+	foreach(dir; dir.directories) {
+		dir.tarball(output);
+	}
+}
+
 void main(string[] args){
 	import std.typecons : scoped;
 	import std.mmfile : MmFile;
 	import std.string : split;
 	import std.file : exists;
+	import std.getopt : getopt, defaultGetoptPrinter;
+
+	bool tarball;
+	auto opt = getopt(args, "tarball", "Generates tarball of the given path", &tarball);
+	if (opt.helpWanted) {
+		defaultGetoptPrinter("Tarball indexer", opt.options);
+		return;
+	}
 
 	foreach(arg; args[1..$]) {
 		Directory index;
@@ -324,9 +355,17 @@ void main(string[] args){
 
 		auto r = index.get(subpath.split("/"));
 		if (r[0] !is null) {
-			writeln(r[0].toString);
+			if (tarball) {
+				(*r[0]).tarball(stdout);
+			} else {
+				writeln(r[0].toString);
+			}
 		} else if (r[1] !is null) {
-			stdout.rawWrite(r[1]);
+			if (tarball) {
+				stdout.rawWrite(r[1].tarball);
+			} else {
+				stdout.rawWrite(r[1].data);
+			}
 		} else {
 			writeln("Path ", subpath, " not found on ", path);
 		}
